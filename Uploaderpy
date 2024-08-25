@@ -1,97 +1,119 @@
 import os
 import base64
 import tkinter as tk
-from tkinter import filedialog, simpledialog, messagebox
+from tkinter import filedialog, simpledialog, messagebox, ttk
 from github import Github, GithubException
 import traceback
 import re
+import threading
 
-def select_folder():
-    root = tk.Tk()
-    root.withdraw()
-    folder_path = filedialog.askdirectory(title="Select folder to upload")
-    return folder_path
+class GitHubUploaderApp:
+    def __init__(self, master):
+        self.master = master
+        master.title("GitHub Folder Uploader")
+        master.geometry("1000x400")  # Doubled the width
 
-def get_github_token():
-    root = tk.Tk()
-    root.withdraw()
-    token = simpledialog.askstring("GitHub Token", "Enter your GitHub token:", show='*')
-    return token
+        self.folder_path = tk.StringVar()
+        self.github_token = tk.StringVar()
+        self.repo_description = tk.StringVar()
+        self.commit_message = tk.StringVar()
 
-def show_error(message):
-    root = tk.Tk()
-    root.withdraw()
-    messagebox.showerror("Error", message)
+        self.create_widgets()
 
-def sanitize_path(path):
-    # Remove any leading slashes or dots
-    path = path.lstrip('./\\')
-    # Replace spaces with underscores
-    path = path.replace(' ', '_')
-    # Remove any characters that aren't alphanumeric, underscore, hyphen, or forward slash
-    path = re.sub(r'[^\w\-/]', '', path)
-    # Replace multiple forward slashes with a single one
-    path = re.sub(r'/+', '/', path)
-    return path
+    def create_widgets(self):
+        # Folder selection
+        tk.Label(self.master, text="Folder to upload:").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+        tk.Entry(self.master, textvariable=self.folder_path, width=100).grid(row=0, column=1, padx=10, pady=5)
+        tk.Button(self.master, text="Browse", command=self.select_folder).grid(row=0, column=2, padx=10, pady=5)
 
-def upload_to_github(folder_path, github_token):
-    try:
-        # Authenticate with GitHub
-        g = Github(github_token)
-        user = g.get_user()
+        # GitHub token
+        tk.Label(self.master, text="GitHub Token:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        tk.Entry(self.master, textvariable=self.github_token, show="*", width=100).grid(row=1, column=1, columnspan=2, padx=10, pady=5)
 
-        # Get the folder name
-        folder_name = os.path.basename(folder_path)
+        # Repository description
+        tk.Label(self.master, text="Repository Description:").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+        tk.Entry(self.master, textvariable=self.repo_description, width=100).grid(row=2, column=1, columnspan=2, padx=10, pady=5)
 
-        # Check if a repo with a similar name exists
+        # Commit message
+        tk.Label(self.master, text="Commit Message:").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        tk.Entry(self.master, textvariable=self.commit_message, width=100).grid(row=3, column=1, columnspan=2, padx=10, pady=5)
+
+        # Upload button
+        tk.Button(self.master, text="Upload to GitHub", command=self.start_upload).grid(row=4, column=0, columnspan=3, pady=20)
+
+        # Progress bar
+        self.progress = ttk.Progressbar(self.master, length=900, mode='indeterminate')
+        self.progress.grid(row=5, column=0, columnspan=3, padx=10, pady=5)
+
+        # Status message
+        self.status_message = tk.StringVar()
+        tk.Label(self.master, textvariable=self.status_message, wraplength=980).grid(row=6, column=0, columnspan=3, padx=10, pady=5)
+
+    def select_folder(self):
+        folder_path = filedialog.askdirectory(title="Select folder to upload")
+        self.folder_path.set(folder_path)
+
+    def start_upload(self):
+        if not self.folder_path.get() or not self.github_token.get():
+            messagebox.showerror("Error", "Please provide both folder path and GitHub token.")
+            return
+
+        self.progress.start()
+        self.status_message.set("Uploading...")
+        threading.Thread(target=self.upload_to_github, daemon=True).start()
+
+    def sanitize_path(self, path):
+        path = path.lstrip('./\\')
+        path = path.replace(' ', '_')
+        path = re.sub(r'[^\w\-/]', '', path)
+        path = re.sub(r'/+', '/', path)
+        return path
+
+    def upload_to_github(self):
         try:
-            repo = user.get_repo(folder_name)
-            print(f"Repository '{folder_name}' already exists. Uploading to existing repo.")
-        except GithubException:
-            print(f"Creating new repository '{folder_name}'")
-            repo = user.create_repo(folder_name)
+            g = Github(self.github_token.get())
+            user = g.get_user()
 
-        # Upload files
-        for root, dirs, files in os.walk(folder_path):
-            for file in files:
-                file_path = os.path.join(root, file)
-                with open(file_path, 'rb') as file_content:
-                    content = file_content.read()
-                
-                # Create relative path for GitHub and sanitize it
-                github_file_path = os.path.relpath(file_path, folder_path).replace('\\', '/')
-                github_file_path = sanitize_path(github_file_path)
-                
-                try:
-                    # Try to get the file to see if it exists
-                    contents = repo.get_contents(github_file_path)
-                    repo.update_file(github_file_path, f"Update {github_file_path}", content, contents.sha)
-                    print(f"Updated {github_file_path}")
-                except GithubException as e:
-                    if e.status == 404:  # File doesn't exist
-                        repo.create_file(github_file_path, f"Add {github_file_path}", content)
-                        print(f"Created {github_file_path}")
-                    else:
-                        print(f"Error processing {github_file_path}: {str(e)}")
-                except Exception as e:
-                    print(f"Unexpected error processing {github_file_path}: {str(e)}")
+            folder_name = os.path.basename(self.folder_path.get())
 
-        print(f"Folder '{folder_name}' has been successfully uploaded to GitHub.")
+            try:
+                repo = user.get_repo(folder_name)
+                self.status_message.set(f"Repository '{folder_name}' already exists. Uploading to existing repo.")
+            except GithubException:
+                self.status_message.set(f"Creating new repository '{folder_name}'")
+                repo = user.create_repo(folder_name, description=self.repo_description.get())
 
-    except Exception as e:
-        error_message = f"An error occurred: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-        print(error_message)
-        show_error(error_message)
+            for root, dirs, files in os.walk(self.folder_path.get()):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    with open(file_path, 'rb') as file_content:
+                        content = file_content.read()
+                    
+                    github_file_path = os.path.relpath(file_path, self.folder_path.get()).replace('\\', '/')
+                    github_file_path = self.sanitize_path(github_file_path)
+                    
+                    try:
+                        contents = repo.get_contents(github_file_path)
+                        repo.update_file(github_file_path, self.commit_message.get(), content, contents.sha)
+                        self.status_message.set(f"Updated {github_file_path}")
+                    except GithubException as e:
+                        if e.status == 404:
+                            repo.create_file(github_file_path, self.commit_message.get(), content)
+                            self.status_message.set(f"Created {github_file_path}")
+                        else:
+                            self.status_message.set(f"Error processing {github_file_path}: {str(e)}")
+                    except Exception as e:
+                        self.status_message.set(f"Unexpected error processing {github_file_path}: {str(e)}")
+
+            self.status_message.set(f"Folder '{folder_name}' has been successfully uploaded to GitHub.")
+        except Exception as e:
+            error_message = f"An error occurred: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            self.status_message.set(error_message)
+            messagebox.showerror("Error", error_message)
+        finally:
+            self.progress.stop()
 
 if __name__ == "__main__":
-    folder_path = select_folder()
-    if not folder_path:
-        print("No folder selected. Exiting.")
-        exit(1)
-
-    github_token = get_github_token()
-    if not github_token:
-        print("No GitHub token provided. Exiting.")
-        exit(1)
-
-    upload_to_github(folder_path, github_token)
+    root = tk.Tk()
+    app = GitHubUploaderApp(root)
+    root.mainloop()
