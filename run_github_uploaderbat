@@ -1,0 +1,3 @@
+@echo off
+py Uploader.py
+pause
